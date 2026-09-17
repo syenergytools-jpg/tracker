@@ -1,0 +1,17 @@
+{
+  "name": "ams-productivity-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.5",
+    "esbuild": "^0.23.1"
+  }
+}

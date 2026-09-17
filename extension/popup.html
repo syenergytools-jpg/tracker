@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>AMS Productivity Tracker</title>
+<link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<main class="popup">
+  <header class="popup__header">
+    <span class="popup__dot" id="statusDot"></span>
+    <h1>Productivity Tracker</h1>
+  </header>
+
+  <section id="loadingView" class="view">
+    <p>Loading&hellip;</p>
+  </section>
+
+  <section id="loginView" class="view hidden">
+    <p class="hint">
+      Sign in with your AMS account. This extension records active/idle time
+      and site categories only &mdash; see the README for exactly what is and
+      isn't tracked.
+    </p>
+    <form id="loginForm">
+      <label>Email
+        <input type="email" id="email" required autocomplete="username" />
+      </label>
+      <label>Password
+        <input type="password" id="password" required autocomplete="current-password" />
+      </label>
+      <button type="submit">Sign in</button>
+      <p class="error hidden" id="loginError"></p>
+    </form>
+  </section>
+
+  <section id="trackingView" class="view hidden">
+    <p class="signed-in-as">Signed in as <strong id="userName"></strong></p>
+
+    <div class="timer-card">
+      <div class="timer-value" id="activeTimer">00:00:00</div>
+      <div class="timer-label">Total tracking time today</div>
+    </div>
+
+    <div class="idle-row">
+      <span>Unproductive (idle) today</span>
+      <span class="idle-value" id="idleTimer">00:00:00</span>
+    </div>
+
+    <p class="pause-banner hidden" id="pauseBanner">
+      Tracking is stopped &mdash; you're on a break. Nothing is being recorded.
+    </p>
+    <button id="pauseBtn" class="stop">Stop tracking</button>
+
+    <p class="hint">
+      Tracking is visible whenever it runs &mdash; this popup and the toolbar
+      icon are never hidden while active.
+    </p>
+    <button id="signOutBtn" class="secondary">Sign out</button>
+  </section>
+</main>
+<script type="module" src="popup.js"></script>
+</body>
+</html>
