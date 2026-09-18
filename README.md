@@ -1,10 +1,36 @@
 # AMS Productivity Tracker
 
-A Chrome extension that tracks employee active/idle time and site categories,
-using the same Supabase project and login as the existing AMS, plus
-ready-to-drop-in AMS dashboard pages. Built to the constraints in the
+A Chrome extension that tracks employee productive/unproductive time and
+site categories via an explicit Start/Stop session, using the same Supabase
+project and login as the existing AMS. Built to the constraints in the
 original brief: no keystroke content, no page content, no screenshots, and
 never covert.
+
+**Scope note:** this tracks activity *inside the browser* — keyboard/mouse
+events on web pages, and which site/tab is focused. It has no visibility
+into other applications (Excel, Slack desktop, an IDE, etc.). Covering those
+would mean a native, system-wide input-monitoring component outside the
+browser, which is a materially different and much larger project than a
+Chrome extension — this repo does not attempt that.
+
+## How tracking works
+
+1. Sign in via the popup with an AMS email/password.
+2. Click **Start**. A session timer begins counting up from `00:00:00`.
+3. Tracking runs until you click **Stop**, or the browser/system closes —
+   whichever comes first. Closing the browser doesn't need special handling
+   to detect: the running flag lives in `chrome.storage.session`, which
+   Chrome itself clears on a full browser close, so reopening just finds no
+   session running.
+4. While running, every 3 minutes the extension privately checks: did this
+   window see at least a certain number of keypresses **and** at least a
+   certain amount of mouse activity (moves + clicks + scrolls, summed)? If
+   both are true, the whole 3 minutes counts as **Productive**; if either
+   condition fails, the whole 3 minutes counts as **Unproductive**. This
+   check is intentionally not shown to the employee — the popup only ever
+   shows the running session timer and today's cumulative Productive /
+   Unproductive totals, never a per-window verdict.
+5. Tab switches are counted separately the whole time a session runs.
 
 ## What is and isn't tracked
 
@@ -12,57 +38,52 @@ Share this section (or a copy of it) with employees before rollout — several
 jurisdictions legally require notice for this kind of monitoring, and that's
 on the business to handle, not something this tool can substitute for.
 
-**Tracked:**
-- Which website (hostname only, e.g. `docs.google.com` — not the full URL or
-  page content) is open in the active browser tab, and for how long.
-- Whether that time counted as "active" (mouse/keyboard input seen) or
-  "idle" (no input for 3+ minutes, or the OS reports the screen locked/idle).
+**Tracked (only while a session is running):**
+- Which website (hostname only, e.g. `docs.google.com` — never the full URL
+  or page content) is open in the active browser tab.
 - A count of key presses, mouse moves, mouse clicks, and scroll events — as
-  numbers only, to tell "active" from "idle." Never which key, never typed
-  text, never form contents, never clipboard.
-- Coarse timing/movement statistics on those same counts (e.g. "were mouse
-  movements suspiciously uniform"), used only to flag possible automation
-  (see "Anti-gaming flags" below) — not what was clicked or typed.
-- Tab-switch counts.
-- When you used the extension's own **Stop tracking** button and for how
-  long — recorded as a separate "on a break" total, not counted as idle.
+  numbers only. Never which key, never typed text, never form contents,
+  never clipboard.
+- Every 3 minutes, whether those counts crossed the productive threshold
+  (see above) — recorded as Productive or Unproductive seconds, attributed
+  to whichever site was focused when the window closed.
+- Tab-switch counts, and coarse timing/movement statistics on the same
+  key/mouse counts (e.g. "were mouse movements suspiciously uniform"), used
+  only for the best-effort anti-gaming flags below — not what was clicked or
+  typed.
 
 **Never tracked:** what you typed, page text or form field contents,
-screenshots or screen recording, clipboard, webcam, or audio.
+screenshots or screen recording, clipboard, webcam, or audio. Nothing is
+tracked before Start is clicked or after Stop / a browser close.
 
-**Always visible:** the extension's toolbar icon always shows a badge
-(`ON` / `IDLE` / `BRK` / `OFF`), and the popup shows a live stopwatch of
-today's total tracking (active) time plus today's idle time, updating in
-real time while it runs. It never runs invisibly.
+**Always visible:** the toolbar badge always shows a state (`OFF` signed
+out, `RDY` signed in but stopped, `RUN` while a session runs) and the popup
+shows the live session timer plus today's totals. It never runs invisibly.
 
-## Starting and stopping (breaks)
-
-The popup has a **Start tracking** / **Stop tracking** button for lunch,
-meetings elsewhere, or anything else where "idle" (still clocked into
-tracking, just no input seen) isn't the honest description — "not being
-tracked right now" is. Clicking Stop: no active/idle ticks accrue, no
-activity pings are recorded, and tab switches don't count toward the
-tab-switch total or the anti-gaming checks. The toolbar badge shows `BRK`
-the whole time, and the popup shows a plain "tracking is stopped" banner —
-same never-covert principle as the rest of the extension. Clicking Start
-again resets idle detection fresh rather than trusting whatever
-`lastInputAt` was before the break.
-
-Break time is still synced to Supabase as `productivity_sessions
-.paused_seconds` — a neutral, transparent number, not folded into idle —
-so an admin sees "on a declared break for 45m" instead of an unexplained gap
-that looks like the employee walked away without saying so. Signing out
-clears any stale paused state so it can't silently carry into the next
-session.
+**Be aware:** the productive/unproductive formula requires *both* real
+typing and real mouse/scroll activity within the same 3-minute window. That
+can misclassify legitimate work that's heavily one-sided — e.g. writing code
+with little mouse use, or reviewing a design with little typing — as
+unproductive. The two thresholds (`PRODUCTIVE_KEY_THRESHOLD`,
+`PRODUCTIVE_MOUSE_ACTIVITY_THRESHOLD` in `extension/src/lib/
+productivityFormula.js`) are deliberately the only tunable knobs; adjust
+them from observed false-positive/negative rates.
 
 ## Project layout
 
 ```
-supabase/migrations/   — the 3 new tables + RLS policies, plus a follow-up
-                          migration adding paused_seconds
+supabase/migrations/   — schema: the 3 tables + RLS, then a rename/rework
+                          migration for the productive/unproductive model
 extension/              — the Chrome extension (MV3)
-ams-integration/        — Next.js pages to drop into the actual AMS repo
 ```
+
+An earlier pass of this project also scaffolded `ams-integration/` (Next.js
+admin/employee dashboard pages meant to be copied into the real AMS repo).
+That folder isn't part of the repo anymore — it's not on disk and isn't in
+git history here. If you still want dashboard pages wired to the schema
+below, that would need to be rebuilt against whatever the AMS repo looks
+like now, since the two have very likely drifted from what was scaffolded
+before.
 
 ## Setup
 
@@ -71,12 +92,16 @@ ams-integration/        — Next.js pages to drop into the actual AMS repo
 Apply both migrations, in order, with the Supabase CLI (or however the AMS
 repo already runs migrations):
 
-1. `20260917120000_productivity_tracking.sql` — the 3 tables + RLS. Assumes
+1. `20260917120000_productivity_tracking.sql` — `site_activity`,
+   `productivity_sessions`, `site_categories` + RLS. Assumes
    `public.profiles` and a `public.is_admin()` function already exist (same
    ones the AMS's `attendance`/`salary_slips` policies use) — it doesn't
    redefine them.
-2. `20260917130000_add_paused_seconds.sql` — adds the column the Stop
-   tracking button's break time syncs to.
+2. `20260918100000_productive_sessions_rework.sql` — renames the
+   active/idle columns to `total_productive_seconds` /
+   `total_unproductive_seconds` (on `productivity_sessions`) and
+   `productive_seconds` / `unproductive_seconds` (on `site_activity`), and
+   drops a since-retired `paused_seconds` column from an interim design.
 
 ### 2. Extension
 
@@ -90,39 +115,11 @@ npm run build
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load
 unpacked** → select `extension/dist`.
 
-Sign in with an existing AMS email/password. `npm run watch` rebuilds on
-file changes during development (you'll still need to click the reload icon
-on `chrome://extensions` after a rebuild).
-
-### 3. AMS dashboard pages
-
-`ams-integration/` isn't wired into the real AMS repo yet — it's a separate
-folder you were pointed away from for this pass. It contains:
-
-- `app/admin/productivity/page.tsx` — all-employees view, per-day, with a
-  "needs categorization" panel and the flagged-sessions list.
-- `app/productivity/page.tsx` — an employee's own data only (today + last 7
-  days), including their own flag status if any.
-- `lib/supabaseClient.ts`, `lib/productivityQueries.ts`, `lib/format.ts`
-
-To integrate: copy `app/` and `lib/` into the AMS repo (merging `lib/` if it
-already has files by those names), then:
-
-- **Delete `lib/supabaseClient.ts`** and import the AMS's existing Supabase
-  browser client instead, if it has one — don't run two client instances.
-- **Fix the admin access gate**: the admin page currently checks
-  `profiles.role === 'ADMIN'` client-side as a quick UX guard (RLS is what
-  actually enforces access). Swap it for whatever pattern `/admin/*` already
-  uses in the AMS, if there is a shared one.
-- **Fix `EmployeeProfile.full_name`**: the schema we were given only
-  confirms `role`/`department`/`shift_start`/`shift_end` on `profiles` — we
-  don't know the actual display-name column(s). Update the type and the
-  `select()` in `lib/productivityQueries.ts` to match.
-- If the AMS uses `@/lib/...` path aliases (the Next.js default) instead of
-  relative imports, or a `src/` layout, adjust the import paths accordingly.
-- Optionally wire `'PRODUCTIVITY_FLAGGED'` into the `notifications` table's
-  `type` check constraint — see the commented-out block at the bottom of the
-  migration file.
+Sign in with an existing AMS email/password, then click **Start**.
+`npm run watch` rebuilds on file changes during development (you'll still
+need to click the reload icon on `chrome://extensions` after a rebuild, and
+refresh any tabs that were already open before that reload — see
+"Limitations" below).
 
 ## Anti-gaming flags — what they mean
 
@@ -130,74 +127,76 @@ already has files by those names), then:
 best-effort pattern matching (uniform input timing, near-zero mouse
 movement, key-only activity with nothing else, or rapid tab switching with
 no dwell time) — see `extension/src/lib/heuristics.js`. These are
-**statistical anomalies for a human to review, not proof of anything**. A
-person watching a training video with a still mouse will look "idle," not
-"cheating." Nothing here auto-penalizes an employee, and nothing here can
-reliably detect a physical mouse jiggler or auto-clicker — those produce
-real OS-level input, indistinguishable from a human by any browser
-extension.
+**statistical anomalies for a human to review, not proof of anything**, and
+they're independent of the productive/unproductive formula above — a
+session can be flagged regardless of how its windows were classified.
+Nothing here auto-penalizes an employee, and nothing here can reliably
+detect a physical mouse jiggler or auto-clicker — those produce real
+OS-level input, indistinguishable from a human by any browser extension.
 
-## Notable deviations from the original spec (and why)
+## Architecture notes
 
-- **60-second tick, not 30.** Chrome clamps repeating `chrome.alarms` to a
-  1-minute minimum once an extension is packed/published (unpacked dev
-  builds can get away with less, which would have silently broken on
-  release). The 3-minute idle threshold and backfill behavior are unchanged
-  — it's just 3 ticks of 60s instead of 6 ticks of 30s.
-- **Local state holds running daily totals, not since-last-flush deltas.**
-  The brief describes accumulate-then-reset-after-flush. Reset-after-flush
-  only works safely with an *additive* upsert (a Postgres function doing
-  `... = existing + delta`), which the brief didn't ask for. Instead, local
-  state keeps the day's full running total and every sync overwrites
-  Supabase with that total — simpler, and trivially safe to retry (a failed
-  or repeated push can never double-count, which a reset-based delta scheme
-  can if a response is lost after the server already committed it).
+- **Why a 3-minute alarm works cleanly here:** Chrome clamps repeating
+  `chrome.alarms` to a 1-minute floor once an extension is packed/published.
+  The spec's window size (3 minutes) is comfortably above that floor, so —
+  unlike an earlier design in this project that used a 30s/60s tick and had
+  to explicitly account for the clamp — no compromise was needed here.
+- **Why session/window state lives in `chrome.storage.session`, not plain
+  variables:** MV3 service workers are killed and cold-started constantly —
+  often between almost every content-script activity batch (~7s) and the
+  3-minute window alarm. Anything held only in a module-level `let` gets
+  wiped on each restart. `extension/src/lib/sessionState.js` and
+  `dailyState.js` persist everything that needs to survive that (today's
+  totals, and the current session/window's running counts) to
+  `chrome.storage`, loaded once and mutated in place. `chrome.storage
+  .session` specifically (rather than `.local`) is used for the run/window
+  state because it's *also* cleared on a full browser close — which is
+  exactly the "stop when the browser closes" behavior needed, with no extra
+  detection code.
+- **Why `chrome.alarms.create()` is only ever called if the alarm doesn't
+  already exist:** re-creating an alarm resets its schedule. Since the
+  top-level script re-runs on every service worker cold start, calling
+  `create()` unconditionally there kept pushing the alarm's next fire time
+  back before it ever arrived — the underlying alarm is durable across
+  restarts, it just must not be re-created every time. See `ensureAlarm` in
+  `background.js`.
+- **Why `sync.js` always overwrites Supabase with the day's running total**
+  rather than sending a since-last-sync delta: an additive "increment and
+  reset" scheme can double-count if a response is lost after the server
+  already committed it. Local state keeps the full day's total and every
+  sync overwrites with that total, which is trivially safe to retry.
 
 ## Limitations of this pass
 
 - **Not tested against a real Chrome profile or a real Supabase project** —
-  there's no Supabase project connected here and this environment can't
-  drive `chrome://extensions`. What *was* verified: the extension builds
-  cleanly with `npm run build`; the idle-detection accumulator, the four
-  anti-gaming heuristics, and the pause/resume state (including resume-time
-  break-duration accounting) were exercised with scripted inputs confirming
-  correct behavior; and the actual popup HTML/CSS/JS were run in a browser
-  against a mocked `chrome.runtime` to check the Start/Stop button, banner,
-  badge colors, and live timer stay in sync.
-- **Three real bugs were caught and fixed against actual usage feedback**,
-  worth knowing about since this pass couldn't run a full real-world smoke
-  test itself:
-  - The "stopped" banner and button state could disagree, because `.hidden`
-    was only ever defined as `.view.hidden` and didn't hide non-`.view`
-    elements like the banner.
-  - Today's totals could get stuck at zero. `chrome.alarms.create()` resets
-    an alarm's schedule if one by that name already exists, and this
-    top-level code re-runs on every service worker cold start (frequent in
-    MV3 — even the popup's own status polling can trigger one). Creating
-    the tick/flush alarms unconditionally on every restart kept pushing
-    their "next fire" time back before it ever arrived, so nothing was ever
-    committed. Fixed by only creating an alarm that doesn't already exist
-    (`ensureAlarm` in `background.js`) — the underlying alarm is durable
-    across service worker restarts, it just shouldn't be re-created.
-  - Idle time could be significantly overcounted relative to active time.
-    `lastInputAt`, `osIdleState`, `pendingTicks`, and `idleStreakConfirmed`
-    lived only in plain module-level variables. Every service worker cold
-    start (which, as above, happens constantly) reset them to their
-    defaults — in particular `lastInputAt` back to 0 — so a tick evaluated
-    right after a restart would see "no input in the last 60s" even during
-    genuinely continuous typing/mouse use, because the *previous* wake
-    instance's update to that variable never survived to this one. Fixed by
-    moving all of it into `lib/tickState.js`, persisted to
-    `chrome.storage.local` the same way `dailyState.js` already was — see
-    that file's comment for the full explanation, and the restart-simulation
-    test that reproduces and confirms the fix for this exact failure mode.
-  Given bugs of the second and third kind already made it through once,
-  budget for an actual multi-minute smoke test after loading unpacked —
-  watch the popup for a few minutes of real, continuous use and confirm the
-  active/idle split roughly matches what you actually did, not just that
-  the UI renders and numbers move at all.
-  Before rolling out, smoke-test end to end: load unpacked, sign in against
-  a staging Supabase project, and watch a `site_activity` row update.
-- The `ams-integration` pages haven't been run inside an actual Next.js app
-  (no such app is available in this environment) — expect minor import-path
-  fixes when you drop them in (see Setup step 3 above).
+  there's no Supabase project connected in this environment and it can't
+  drive `chrome://extensions` directly. What *was* verified: the extension
+  builds cleanly with `npm run build`; `dailyState.commitWindow`, the
+  productive/unproductive formula's threshold edges, tab-switch/flag
+  bookkeeping, and all four anti-gaming heuristics were exercised with
+  scripted inputs; `sessionState`'s persistence was confirmed to survive a
+  simulated service-worker restart; and the actual popup HTML/CSS/JS were
+  run in a browser against a mocked `chrome.runtime` (including a fake
+  window that turns productive after simulated activity) to check Start/
+  Stop, the session timer, and the totals stay in sync end to end.
+  Before rolling out, still smoke-test for real: load unpacked, sign in
+  against a staging Supabase project, run a session for several minutes of
+  genuine mixed work, and confirm the Productive/Unproductive split is
+  reasonable and a `site_activity` row actually updates.
+- **Real bugs already caught this way, worth knowing about** since this
+  pass can't run that real-world smoke test itself:
+  - A CSS bug where a "stopped" banner could stay visible regardless of
+    actual state, because `.hidden` was only ever defined as `.view.hidden`
+    and didn't hide non-`.view` elements.
+  - Totals stuck at zero, from the alarm-recreation bug described above.
+  - Time being systematically miscounted, from tracking bookkeeping
+    (equivalent to today's `sessionState.js`) living only in plain
+    module-level variables that a service-worker restart would wipe.
+  All three were architectural, not one-off typos — the general lesson
+  (anything that must survive a tick-to-tick or restart-to-restart gap
+  belongs in `chrome.storage`, not a `let`) is now applied consistently, but
+  a real multi-minute smoke test is still the way to catch anything like
+  this that scripted tests didn't.
+- The productive/unproductive AND-threshold risk described above is a
+  known, accepted tradeoff from the spec, not a bug — but it's the first
+  thing to reconsider if reported numbers don't match reality.

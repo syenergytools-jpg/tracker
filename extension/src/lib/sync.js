@@ -21,8 +21,8 @@ export async function syncState(state, userId) {
       work_date: state.workDate,
       hostname,
       category: state.sites[hostname].category,
-      active_seconds: state.sites[hostname].activeSeconds,
-      idle_seconds: state.sites[hostname].idleSeconds,
+      productive_seconds: state.sites[hostname].productiveSeconds,
+      unproductive_seconds: state.sites[hostname].unproductiveSeconds,
       updated_at: nowIso,
     }));
 
@@ -39,10 +39,9 @@ export async function syncState(state, userId) {
     {
       user_id: userId,
       work_date: state.workDate,
-      total_active_seconds: state.totalActiveSeconds,
-      total_idle_seconds: state.totalIdleSeconds,
+      total_productive_seconds: state.totalProductiveSeconds,
+      total_unproductive_seconds: state.totalUnproductiveSeconds,
       tab_switch_count: state.tabSwitchCount,
-      paused_seconds: state.pausedSeconds ?? 0,
       flagged_suspicious: state.flagReasons.length > 0,
       flag_reason: state.flagReasons.length > 0 ? state.flagReasons.join(',') : null,
       updated_at: new Date().toISOString(),

@@ -1,27 +1,16 @@
 import { supabase, ensureFreshSession, fetchProfile } from './lib/supabaseClient.js';
-import {
-  rotateIfNeeded,
-  getState,
-  commitTicks,
-  recordTabSwitch,
-  applyFlagReasons,
-  addPausedSeconds,
-  TICK_SECONDS,
-} from './lib/dailyState.js';
+import { rotateIfNeeded, getState, commitWindow, recordTabSwitch, applyFlagReasons } from './lib/dailyState.js';
 import { getCategory, refreshCategories } from './lib/categories.js';
 import { createHeuristicsEngine } from './lib/heuristics.js';
 import { syncWithRetry } from './lib/sync.js';
-import { getPauseState, isPaused, setPaused } from './lib/pauseState.js';
-import { getTickState, saveTickState } from './lib/tickState.js';
+import { getSessionState, saveSessionState } from './lib/sessionState.js';
+import { isWindowProductive } from './lib/productivityFormula.js';
 
-// Chrome clamps repeating alarms to a 1-minute floor once an extension is
-// packed/published (unpacked dev builds can get away with shorter periods,
-// but that would silently break on release). The brief's 30s tick and 180s
-// idle window still hold in spirit — TICK_SECONDS = 60 everywhere, so "3
-// minutes of silence" is 3 ticks instead of 6. Do not use setInterval here;
-// MV3 kills service workers that try to keep their own timers alive.
-const IDLE_THRESHOLD_MS = 180 * 1000;
-const FLUSH_PERIOD_MINUTES = 3;
+// The 3-minute evaluation is deliberately hidden from the employee (per
+// spec) — the popup only ever shows the running session timer and today's
+// cumulative Productive/Unproductive totals, never a per-window verdict.
+// The classification thresholds themselves live in productivityFormula.js.
+const WINDOW_SECONDS = 180;
 
 let focusedTabId = null;
 let currentHostname = null;
@@ -32,42 +21,27 @@ const heuristics = createHeuristicsEngine();
 
 // ---- lifecycle -------------------------------------------------------
 
-chrome.idle.setDetectionInterval(60);
-chrome.idle.onStateChanged.addListener((state) => {
-  // 'active' | 'idle' | 'locked' — persisted; see tickState.js for why.
-  recordOsIdleState(state);
-});
-
-async function recordOsIdleState(state) {
-  const tickState = await getTickState();
-  tickState.osIdleState = state;
-  await saveTickState();
-}
-
 // chrome.alarms.create() resets an alarm's schedule if one by that name
 // already exists. This code re-runs on every service worker cold start
 // (frequent in MV3 — even the popup's own status polling can trigger one),
-// so creating unconditionally kept pushing the tick's "next fire" time back
-// before it ever arrived, and nothing was ever committed. Only create an
-// alarm that doesn't already exist.
+// so creating unconditionally kept pushing the alarm's "next fire" time
+// back before it ever arrived. Only create an alarm that doesn't already
+// exist.
 async function ensureAlarm(name, alarmInfo) {
   const existing = await chrome.alarms.get(name);
   if (!existing) chrome.alarms.create(name, alarmInfo);
 }
 
-ensureAlarm('tick', { periodInMinutes: 1 });
-ensureAlarm('flush', { periodInMinutes: FLUSH_PERIOD_MINUTES });
+ensureAlarm('window', { periodInMinutes: WINDOW_SECONDS / 60 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'tick') handleTick();
-  else if (alarm.name === 'flush') flush();
+  if (alarm.name === 'window') handleWindowAlarm();
 });
 
 chrome.runtime.onSuspend.addListener(() => {
   // Best-effort only — MV3 does not guarantee async work here finishes
-  // before the process is torn down. Real resilience comes from persisting
-  // state to chrome.storage.local on every tick and flushing every few
-  // minutes, not from this hook.
+  // before the process is torn down. A session ended by an unclean browser
+  // close simply loses its current partial window, nothing more.
   flush();
 });
 
@@ -123,11 +97,14 @@ async function handleTabFocusChange(tabId) {
   }
   currentHostname = hostnameOf(tab?.url);
 
-  if (!isFirstFocus && !(await isPaused())) {
-    await recordTabSwitch();
-    const reasons = heuristics.recordTabSwitch(dwellMs);
-    if (reasons.length > 0) await applyFlagReasons(reasons);
-  }
+  if (isFirstFocus) return;
+
+  const trackSession = await getSessionState();
+  if (!trackSession.running) return;
+
+  await recordTabSwitch();
+  const reasons = heuristics.recordTabSwitch(dwellMs);
+  if (reasons.length > 0) await applyFlagReasons(reasons);
 }
 
 function hostnameOf(url) {
@@ -154,8 +131,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'SIGN_OUT':
       handleSignOut().then(sendResponse);
       return true;
-    case 'SET_PAUSED':
-      handleSetPaused(message.payload).then(sendResponse);
+    case 'START':
+      handleStart().then(sendResponse);
+      return true;
+    case 'STOP':
+      handleStop().then(sendResponse);
       return true;
     default:
       return false;
@@ -164,129 +144,90 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function handleActivityBatch(payload, sender) {
   if (!payload || sender.tab?.id !== focusedTabId) return; // only the focused tab counts
-  if (await isPaused()) return;
 
-  const hasActivity =
-    payload.keyCount > 0 || payload.mouseMoveCount > 0 || payload.mouseDownCount > 0 || payload.scrollCount > 0;
-  if (hasActivity) {
-    const tickState = await getTickState();
-    tickState.lastInputAt = payload.batchEndedAt ?? Date.now();
-    await saveTickState();
-  }
+  const trackSession = await getSessionState();
+  if (!trackSession.running) return; // nothing accrues outside a Start/Stop session
+
+  trackSession.windowKeyCount += payload.keyCount;
+  trackSession.windowMouseActivityCount += payload.mouseMoveCount + payload.mouseDownCount + payload.scrollCount;
+  await saveSessionState();
 
   const reasons = heuristics.recordBatch(payload);
-  if (reasons.length > 0) applyFlagReasons(reasons);
+  if (reasons.length > 0) await applyFlagReasons(reasons);
 }
 
-// ---- idle detection tick ------------------------------------------------
-//
-// A tick is a 60s slice attributed to whatever hostname was focused during
-// it. It's "active" if an input ping arrived AND the OS reports the user
-// present; "idle" otherwise. To avoid punishing a normal pause (reading a
-// doc for a minute without touching the mouse), a silent tick isn't
-// committed immediately — it's held in `pendingTicks` until either new
-// input arrives (resolve the whole buffer as active) or the silence reaches
-// 180s (resolve the whole buffer as idle, backfilling every tick in it).
-async function handleTick() {
+// ---- 3-minute window evaluation ------------------------------------------
+
+async function handleWindowAlarm() {
   await rotateIfNeeded((staleState) => flush(staleState));
 
-  if (await isPaused()) {
-    await updateBadge();
-    return;
-  }
+  const trackSession = await getSessionState();
+  if (!trackSession.running) return;
 
-  const tickState = await getTickState();
   const now = Date.now();
-  const hostname = currentHostname;
+  const elapsedSeconds = trackSession.windowStartAt ? (now - trackSession.windowStartAt) / 1000 : WINDOW_SECONDS;
+  await resolveWindow(trackSession, elapsedSeconds);
 
-  if (tickState.osIdleState !== 'active') {
-    const toResolve = [...tickState.pendingTicks, { hostname }];
-    tickState.pendingTicks = [];
-    tickState.idleStreakConfirmed = true;
-    await saveTickState();
-    await commitResolved(toResolve, false);
-    await updateBadge();
-    return;
-  }
+  trackSession.windowStartAt = now;
+  trackSession.windowKeyCount = 0;
+  trackSession.windowMouseActivityCount = 0;
+  await saveSessionState();
 
-  const inputSinceLastTick = tickState.lastInputAt >= now - TICK_SECONDS * 1000;
-  if (inputSinceLastTick) {
-    const toResolve = [...tickState.pendingTicks, { hostname }];
-    tickState.pendingTicks = [];
-    tickState.idleStreakConfirmed = false;
-    await saveTickState();
-    await commitResolved(toResolve, true);
-    await updateBadge();
-    return;
-  }
-
-  if (tickState.idleStreakConfirmed) {
-    await commitResolved([{ hostname }], false);
-    await updateBadge();
-    return;
-  }
-
-  tickState.pendingTicks.push({ hostname });
-  if (now - tickState.lastInputAt >= IDLE_THRESHOLD_MS) {
-    const toResolve = tickState.pendingTicks;
-    tickState.pendingTicks = [];
-    tickState.idleStreakConfirmed = true;
-    await saveTickState();
-    await commitResolved(toResolve, false);
-  } else {
-    await saveTickState();
-  }
-  await updateBadge();
+  // Piggybacks on the same 3-minute cadence as the window evaluation, so a
+  // long-running session (hours) still syncs periodically rather than only
+  // at Stop time or the best-effort onSuspend flush.
+  await flush();
 }
 
-// Manual "on a break" control (see extension popup). Distinct from idle:
-// idle is inferred from silence, paused is an explicit employee action, and
-// neither activity pings nor tab switches count while paused.
-async function handleSetPaused({ paused }) {
-  const current = await getPauseState();
-  if (paused === current.paused) return { ok: true, paused };
-
-  const tickState = await getTickState();
-
-  if (paused) {
-    // Resolve whatever's mid-buffer as active rather than leaving an
-    // ambiguous tail to be judged later — the break started now, not
-    // sometime in the last 180s.
-    if (tickState.pendingTicks.length > 0) {
-      await commitResolved(tickState.pendingTicks, true);
-      tickState.pendingTicks = [];
-    }
-  } else {
-    if (current.pausedAt) {
-      await addPausedSeconds((Date.now() - current.pausedAt) / 1000);
-    }
-    // Coming back from a break isn't itself activity — start idle detection
-    // fresh instead of trusting a stale pre-break lastInputAt.
-    tickState.lastInputAt = 0;
-    tickState.idleStreakConfirmed = false;
-    tabFocusedAt = Date.now();
-  }
-  await saveTickState();
-
-  await setPaused(paused);
-  await updateBadge();
-  return { ok: true, paused };
+async function resolveWindow(trackSession, elapsedSeconds) {
+  if (elapsedSeconds <= 0) return;
+  const isProductive = isWindowProductive({
+    keyCount: trackSession.windowKeyCount,
+    mouseActivityCount: trackSession.windowMouseActivityCount,
+  });
+  const category = currentHostname ? await getCategory(currentHostname) : undefined;
+  await commitWindow({ hostname: currentHostname, seconds: elapsedSeconds, isProductive, category });
 }
 
-async function commitResolved(ticks, isActive) {
-  if (ticks.length === 0) return;
-  const uniqueHostnames = [...new Set(ticks.map((t) => t.hostname).filter(Boolean))];
-  const categoryByHostname = new Map();
-  for (const hostname of uniqueHostnames) {
-    categoryByHostname.set(hostname, await getCategory(hostname));
+// ---- Start / Stop session control ----------------------------------------
+
+async function handleStart() {
+  const trackSession = await getSessionState();
+  if (trackSession.running) {
+    return { ok: true, running: true, sessionStartedAt: trackSession.sessionStartedAt };
   }
-  await commitTicks(
-    ticks.map((t) => ({
-      hostname: t.hostname,
-      isActive,
-      category: t.hostname ? categoryByHostname.get(t.hostname) : undefined,
-    }))
-  );
+
+  const now = Date.now();
+  trackSession.running = true;
+  trackSession.sessionStartedAt = now;
+  trackSession.windowStartAt = now;
+  trackSession.windowKeyCount = 0;
+  trackSession.windowMouseActivityCount = 0;
+  await saveSessionState();
+  await updateBadge();
+  return { ok: true, running: true, sessionStartedAt: now };
+}
+
+async function handleStop() {
+  const trackSession = await getSessionState();
+  if (!trackSession.running) return { ok: true, running: false };
+
+  // Evaluate whatever's accumulated in the current partial window using its
+  // real elapsed duration (not a full 180s) rather than discarding it.
+  const now = Date.now();
+  const elapsedSeconds = trackSession.windowStartAt ? (now - trackSession.windowStartAt) / 1000 : 0;
+  await resolveWindow(trackSession, elapsedSeconds);
+
+  trackSession.running = false;
+  trackSession.sessionStartedAt = null;
+  trackSession.windowStartAt = null;
+  trackSession.windowKeyCount = 0;
+  trackSession.windowMouseActivityCount = 0;
+  await saveSessionState();
+
+  await flush();
+  await updateBadge();
+  return { ok: true, running: false };
 }
 
 // ---- sync ----------------------------------------------------------------
@@ -315,24 +256,19 @@ async function loadCurrentUser(session) {
 }
 
 async function handleGetStatus() {
-  const session = await ensureFreshSession();
-  if (!session) return { authenticated: false };
-  if (!currentUser) await loadCurrentUser(session);
+  const authSession = await ensureFreshSession();
+  if (!authSession) return { authenticated: false };
+  if (!currentUser) await loadCurrentUser(authSession);
+
   const state = await getState();
-  const paused = await isPaused();
-  const tickState = await getTickState();
-  const currentlyActive =
-    !paused &&
-    tickState.osIdleState === 'active' &&
-    !tickState.idleStreakConfirmed &&
-    tickState.lastInputAt >= Date.now() - TICK_SECONDS * 1000;
+  const trackSession = await getSessionState();
   return {
     authenticated: true,
-    email: currentUser?.email ?? session.user.email,
-    todayActiveSeconds: state.totalActiveSeconds,
-    todayIdleSeconds: state.totalIdleSeconds,
-    paused,
-    currentlyActive,
+    email: currentUser?.email ?? authSession.user.email,
+    running: trackSession.running,
+    sessionStartedAt: trackSession.sessionStartedAt,
+    todayProductiveSeconds: state.totalProductiveSeconds,
+    todayUnproductiveSeconds: state.totalUnproductiveSeconds,
   };
 }
 
@@ -344,17 +280,16 @@ async function handleSignIn({ email, password }) {
 }
 
 async function handleSignOut() {
-  await flush();
+  await handleStop(); // close out any running session cleanly first
   await supabase.auth.signOut();
   currentUser = null;
-  await setPaused(false); // don't carry a stale "on a break" across sessions
   await updateBadge();
   return { ok: true };
 }
 
 // ---- visible status badge -----------------------------------------------
 // Required by design: this extension must never track silently. The badge
-// always shows something, whether signed out, active, or idle.
+// always shows something, whether signed out, ready, or running.
 
 async function updateBadge() {
   if (!currentUser) {
@@ -362,16 +297,12 @@ async function updateBadge() {
     chrome.action.setBadgeBackgroundColor({ color: '#9CA3AF' });
     return;
   }
-  if (await isPaused()) {
-    chrome.action.setBadgeText({ text: 'BRK' });
-    chrome.action.setBadgeBackgroundColor({ color: '#3B82F6' });
-    return;
+  const trackSession = await getSessionState();
+  if (trackSession.running) {
+    chrome.action.setBadgeText({ text: 'RUN' });
+    chrome.action.setBadgeBackgroundColor({ color: '#16A34A' });
+  } else {
+    chrome.action.setBadgeText({ text: 'RDY' });
+    chrome.action.setBadgeBackgroundColor({ color: '#9CA3AF' });
   }
-  const tickState = await getTickState();
-  const isActive =
-    tickState.osIdleState === 'active' &&
-    !tickState.idleStreakConfirmed &&
-    tickState.lastInputAt >= Date.now() - TICK_SECONDS * 1000;
-  chrome.action.setBadgeText({ text: isActive ? 'ON' : 'IDLE' });
-  chrome.action.setBadgeBackgroundColor({ color: isActive ? '#16A34A' : '#F59E0B' });
 }

@@ -18,9 +18,9 @@
 
   <section id="loginView" class="view hidden">
     <p class="hint">
-      Sign in with your AMS account. This extension records active/idle time
-      and site categories only &mdash; see the README for exactly what is and
-      isn't tracked.
+      Sign in with your AMS account. This extension records productive/
+      unproductive time and site categories only &mdash; see the README for
+      exactly what is and isn't tracked.
     </p>
     <form id="loginForm">
       <label>Email
@@ -38,23 +38,30 @@
     <p class="signed-in-as">Signed in as <strong id="userName"></strong></p>
 
     <div class="timer-card">
-      <div class="timer-value" id="activeTimer">00:00:00</div>
-      <div class="timer-label">Total tracking time today</div>
+      <div class="timer-value" id="sessionTimer">00:00:00</div>
+      <div class="timer-label">Current session</div>
     </div>
 
-    <div class="idle-row">
-      <span>Unproductive (idle) today</span>
-      <span class="idle-value" id="idleTimer">00:00:00</span>
+    <div class="button-row">
+      <button id="startBtn" class="start">Start</button>
+      <button id="stopBtn" class="stop">Stop</button>
     </div>
 
-    <p class="pause-banner hidden" id="pauseBanner">
-      Tracking is stopped &mdash; you're on a break. Nothing is being recorded.
-    </p>
-    <button id="pauseBtn" class="stop">Stop tracking</button>
+    <div class="stats">
+      <div class="stat">
+        <span class="stat__value" id="productiveTotal">00:00:00</span>
+        <span class="stat__label">Productive today</span>
+      </div>
+      <div class="stat">
+        <span class="stat__value" id="unproductiveTotal">00:00:00</span>
+        <span class="stat__label">Unproductive today</span>
+      </div>
+    </div>
 
     <p class="hint">
-      Tracking is visible whenever it runs &mdash; this popup and the toolbar
-      icon are never hidden while active.
+      Tracking runs only between Start and Stop, and stops automatically if
+      you close the browser &mdash; the toolbar icon always shows whether
+      it's running.
     </p>
     <button id="signOutBtn" class="secondary">Sign out</button>
   </section>

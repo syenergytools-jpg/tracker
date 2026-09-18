@@ -11,11 +11,12 @@ const statusDot = document.getElementById('statusDot');
 const loginForm = document.getElementById('loginForm');
 const loginError = document.getElementById('loginError');
 const userName = document.getElementById('userName');
-const activeTimerEl = document.getElementById('activeTimer');
-const idleTimerEl = document.getElementById('idleTimer');
+const sessionTimerEl = document.getElementById('sessionTimer');
+const productiveTotalEl = document.getElementById('productiveTotal');
+const unproductiveTotalEl = document.getElementById('unproductiveTotal');
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
 const signOutBtn = document.getElementById('signOutBtn');
-const pauseBtn = document.getElementById('pauseBtn');
-const pauseBanner = document.getElementById('pauseBanner');
 
 function showView(view) {
   for (const el of [loadingView, loginView, trackingView]) el.classList.add('hidden');
@@ -28,27 +29,21 @@ function formatStopwatch(totalSeconds) {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
 
-// The popup only runs while open, so "live" ticking here is purely a local
-// display effect between syncs with background.js (the actual source of
-// truth). Every refreshStatus() call snaps these back to the authoritative
-// totals, so a slow tick or a missed second here never drifts permanently —
-// it just self-corrects on the next poll.
 let authenticated = false;
-let currentPaused = false;
-let currentlyActive = false;
-let displayActiveSeconds = 0;
-let displayIdleSeconds = 0;
+let running = false;
+let sessionStartedAt = null;
 
-function renderTimers() {
-  activeTimerEl.textContent = formatStopwatch(displayActiveSeconds);
-  idleTimerEl.textContent = formatStopwatch(displayIdleSeconds);
-  activeTimerEl.className = `timer-value ${currentPaused ? 'stopped' : currentlyActive ? 'active' : 'idle'}`;
+function renderSessionTimer() {
+  const elapsed = running && sessionStartedAt ? (Date.now() - sessionStartedAt) / 1000 : 0;
+  sessionTimerEl.textContent = formatStopwatch(elapsed);
+  sessionTimerEl.className = `timer-value ${running ? 'running' : 'stopped'}`;
 }
 
-function applyPausedUI(paused) {
-  pauseBanner.classList.toggle('hidden', !paused);
-  pauseBtn.textContent = paused ? 'Start tracking' : 'Stop tracking';
-  pauseBtn.className = paused ? 'start' : 'stop';
+function applyRunningUI() {
+  startBtn.disabled = running;
+  stopBtn.disabled = !running;
+  statusDot.className = running ? 'popup__dot running' : 'popup__dot';
+  renderSessionTimer();
 }
 
 async function refreshStatus() {
@@ -62,24 +57,21 @@ async function refreshStatus() {
   }
 
   userName.textContent = status.email;
-  currentPaused = !!status.paused;
-  currentlyActive = !!status.currentlyActive;
-  displayActiveSeconds = status.todayActiveSeconds;
-  displayIdleSeconds = status.todayIdleSeconds;
+  running = !!status.running;
+  sessionStartedAt = status.sessionStartedAt ?? null;
+  productiveTotalEl.textContent = formatStopwatch(status.todayProductiveSeconds);
+  unproductiveTotalEl.textContent = formatStopwatch(status.todayUnproductiveSeconds);
 
-  applyPausedUI(currentPaused);
-  renderTimers();
-  statusDot.className = currentPaused ? 'popup__dot paused' : `popup__dot ${currentlyActive ? 'active' : 'idle'}`;
+  applyRunningUI();
   showView(trackingView);
 }
 
-// Smooth per-second tick between the ~3s authoritative polls below.
-setInterval(() => {
-  if (!authenticated || currentPaused) return;
-  if (currentlyActive) displayActiveSeconds += 1;
-  else displayIdleSeconds += 1;
-  renderTimers();
-}, 1000);
+// The session timer is exact wall-clock elapsed time, so it's recomputed
+// from sessionStartedAt every second rather than locally accumulated —
+// no drift possible. Productive/Unproductive only change once per hidden
+// 3-minute window, so they're left to update from the next refreshStatus()
+// poll rather than faked with a local per-second tick.
+setInterval(renderSessionTimer, 1000);
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -113,13 +105,24 @@ signOutBtn.addEventListener('click', async () => {
   await refreshStatus();
 });
 
-pauseBtn.addEventListener('click', async () => {
-  pauseBtn.disabled = true;
-  const result = await chrome.runtime.sendMessage({ type: 'SET_PAUSED', payload: { paused: !currentPaused } });
-  pauseBtn.disabled = false;
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  const result = await chrome.runtime.sendMessage({ type: 'START' });
   if (result?.ok) {
-    currentPaused = result.paused;
-    applyPausedUI(currentPaused);
+    running = true;
+    sessionStartedAt = result.sessionStartedAt;
+    applyRunningUI();
+  }
+  await refreshStatus();
+});
+
+stopBtn.addEventListener('click', async () => {
+  stopBtn.disabled = true;
+  const result = await chrome.runtime.sendMessage({ type: 'STOP' });
+  if (result?.ok) {
+    running = false;
+    sessionStartedAt = null;
+    applyRunningUI();
   }
   await refreshStatus();
 });

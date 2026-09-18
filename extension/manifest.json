@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "AMS Productivity Tracker",
   "version": "1.0.0",
-  "description": "Tracks active/idle time and site categories for AMS productivity reporting. No keystroke content, page content, or screenshots are ever captured.",
-  "permissions": ["tabs", "idle", "storage", "alarms"],
+  "description": "Tracks productive/unproductive time and site categories for AMS productivity reporting. No keystroke content, page content, or screenshots are ever captured.",
+  "permissions": ["tabs", "storage", "alarms"],
   "host_permissions": ["https://*/*"],
   "background": { "service_worker": "background.js", "type": "module" },
   "action": {
