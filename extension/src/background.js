@@ -87,6 +87,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 async function handleTabFocusChange(tabId) {
+  // This runs on both a real tab switch (chrome.tabs.onActivated) and a
+  // window-level OS focus change (chrome.windows.onFocusChanged) — the
+  // latter fires every time the user alt-tabs back to Chrome from another
+  // app, even when the active tab inside Chrome never changed. Without this
+  // guard, "alt-tab to Chrome and back" was being counted as a tab switch
+  // every time, inflating the count far beyond actual tab-to-tab clicks.
+  if (tabId === focusedTabId) return;
+
   const isFirstFocus = focusedTabId === null;
   const dwellMs = tabFocusedAt ? Date.now() - tabFocusedAt : null;
 
