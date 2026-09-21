@@ -30,7 +30,7 @@ export async function syncState(state, userId) {
       .from('site_activity')
       .upsert(rows, { onConflict: 'user_id,work_date,hostname' });
     if (siteError) {
-      console.warn('[ams-productivity] site_activity sync failed:', siteError.message);
+      console.warn('[evolut-productivity] site_activity sync failed:', siteError.message);
       return { ok: false, reason: siteError.message };
     }
   }
@@ -49,7 +49,7 @@ export async function syncState(state, userId) {
     { onConflict: 'user_id,work_date' }
   );
   if (sessionError) {
-    console.warn('[ams-productivity] productivity_sessions sync failed:', sessionError.message);
+    console.warn('[evolut-productivity] productivity_sessions sync failed:', sessionError.message);
     return { ok: false, reason: sessionError.message };
   }
 

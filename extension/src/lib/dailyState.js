@@ -87,7 +87,7 @@ export async function rotateIfNeeded(onRollover) {
       try {
         await onRollover(stale);
       } catch (err) {
-        console.warn('[ams-productivity] end-of-day flush failed:', err);
+        console.warn('[evolut-productivity] end-of-day flush failed:', err);
       }
     }
   }

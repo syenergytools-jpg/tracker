@@ -1,4 +1,4 @@
-# AMS Productivity Tracker
+# Evolut Productivity Tracker
 
 A Chrome extension that tracks employee productive/unproductive time and
 site categories via an explicit Start/Stop session, using the same Supabase

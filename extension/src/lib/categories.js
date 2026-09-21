@@ -8,7 +8,7 @@ let lastLoadedAt = 0;
 export async function refreshCategories() {
   const { data, error } = await supabase.from('site_categories').select('hostname, category');
   if (error) {
-    console.warn('[ams-productivity] failed to load site categories:', error.message);
+    console.warn('[evolut-productivity] failed to load site categories:', error.message);
     return cache;
   }
   cache = new Map(data.map((row) => [row.hostname, row.category]));

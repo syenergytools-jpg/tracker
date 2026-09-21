@@ -10,7 +10,7 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storage: chromeStorageAdapter,
-    storageKey: 'ams-productivity-auth',
+    storageKey: 'evolut-productivity-auth',
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
@@ -31,7 +31,7 @@ export async function ensureFreshSession() {
 
   const { data, error } = await supabase.auth.refreshSession();
   if (error) {
-    console.warn('[ams-productivity] session refresh failed:', error.message);
+    console.warn('[evolut-productivity] session refresh failed:', error.message);
     return null;
   }
   return data.session;

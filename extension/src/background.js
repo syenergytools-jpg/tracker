@@ -39,7 +39,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   // An uncaught rejection here would otherwise fail silently — this is a
   // recurring 3-minute handler with no caller to report back to, so it's
   // the only chance to surface a problem before it repeats indefinitely.
-  handleWindowAlarm().catch((err) => console.error('[ams-productivity] window evaluation failed:', err));
+  handleWindowAlarm().catch((err) => console.error('[evolut-productivity] window evaluation failed:', err));
 });
 
 chrome.runtime.onSuspend.addListener(() => {
@@ -163,7 +163,7 @@ async function handleActivityBatch(payload, sender) {
   trackSession.windowMouseActivityCount += payload.mouseMoveCount + payload.mouseDownCount + payload.scrollCount;
   await saveSessionState();
   console.debug(
-    '[ams-productivity] activity batch:',
+    '[evolut-productivity] activity batch:',
     JSON.stringify(payload),
     '-> window totals:',
     trackSession.windowKeyCount,
@@ -206,7 +206,7 @@ async function resolveWindow(trackSession, elapsedSeconds) {
     mouseActivityCount: trackSession.windowMouseActivityCount,
   });
   console.debug(
-    '[ams-productivity] window resolved:',
+    '[evolut-productivity] window resolved:',
     Math.round(elapsedSeconds),
     's, keys=',
     trackSession.windowKeyCount,
@@ -281,7 +281,7 @@ async function loadCurrentUser(session) {
     const profile = await fetchProfile(session.user.id);
     currentUser = { id: session.user.id, role: profile.role, email: session.user.email };
   } catch (err) {
-    console.warn('[ams-productivity] failed to load profile:', err);
+    console.warn('[evolut-productivity] failed to load profile:', err);
     currentUser = { id: session.user.id, role: null, email: session.user.email };
   }
   await updateBadge();

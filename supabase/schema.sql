@@ -1,4 +1,4 @@
--- AMS Productivity Tracker — full schema, kept as ONE idempotent file.
+-- Evolut Productivity Tracker — full schema, kept as ONE idempotent file.
 --
 -- Run this whole file any time the schema needs to change. It's safe to run
 -- repeatedly against a database in any prior state — freshly empty,
