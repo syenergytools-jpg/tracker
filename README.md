@@ -23,13 +23,14 @@ Chrome extension — this repo does not attempt that.
    Chrome itself clears on a full browser close, so reopening just finds no
    session running.
 4. While running, every 3 minutes the extension privately checks: did this
-   window see at least a certain number of keypresses **and** at least a
-   certain amount of mouse activity (moves + clicks + scrolls, summed)? If
-   both are true, the whole 3 minutes counts as **Productive**; if either
-   condition fails, the whole 3 minutes counts as **Unproductive**. This
-   check is intentionally not shown to the employee — the popup only ever
-   shows the running session timer and today's cumulative Productive /
-   Unproductive totals, never a per-window verdict.
+   window see at least a certain number of keypresses **or** at least a
+   certain amount of mouse activity (moves + clicks + scrolls, summed)?
+   Either on its own is enough — if so, the whole 3 minutes counts as
+   **Productive**; if neither crosses its threshold, the whole 3 minutes
+   counts as **Unproductive**. This check is intentionally not shown to the
+   employee — the popup only ever shows the running session timer and
+   today's cumulative Productive / Unproductive totals, never a per-window
+   verdict.
 5. Tab switches are counted separately the whole time a session runs.
 
 ## What is and isn't tracked
@@ -60,21 +61,23 @@ tracked before Start is clicked or after Stop / a browser close.
 out, `RDY` signed in but stopped, `RUN` while a session runs) and the popup
 shows the live session timer plus today's totals. It never runs invisibly.
 
-**Be aware:** the productive/unproductive formula requires *both* real
-typing and real mouse/scroll activity within the same 3-minute window. That
-can misclassify legitimate work that's heavily one-sided — e.g. writing code
-with little mouse use, or reviewing a design with little typing — as
-unproductive. The two thresholds (`PRODUCTIVE_KEY_THRESHOLD`,
-`PRODUCTIVE_MOUSE_ACTIVITY_THRESHOLD` in `extension/src/lib/
-productivityFormula.js`) are deliberately the only tunable knobs; adjust
-them from observed false-positive/negative rates.
+**Be aware:** the productive/unproductive formula only requires *either*
+real typing or real mouse/scroll activity within the same 3-minute window —
+so keyboard-only work (e.g. writing code with little mouse use) and
+mouse-only work (e.g. reviewing a design with little typing) both count as
+productive on their own. The tradeoff is the opposite of an AND-based
+formula: it's more forgiving of one-sided legitimate work, but also easier
+to satisfy with minimal, non-work activity (e.g. idly scrolling). The two
+thresholds (`PRODUCTIVE_KEY_THRESHOLD`, `PRODUCTIVE_MOUSE_ACTIVITY_
+THRESHOLD` in `extension/src/lib/productivityFormula.js`) are deliberately
+the only tunable knobs; adjust them from observed false-positive/negative
+rates rather than reworking the OR shape.
 
 ## Project layout
 
 ```
-supabase/migrations/   — schema: the 3 tables + RLS, then a rename/rework
-                          migration for the productive/unproductive model
-extension/              — the Chrome extension (MV3)
+supabase/schema.sql   — the whole schema, as one idempotent script (see below)
+extension/             — the Chrome extension (MV3)
 ```
 
 An earlier pass of this project also scaffolded `ams-integration/` (Next.js
@@ -89,19 +92,26 @@ before.
 
 ### 1. Database
 
-Apply both migrations, in order, with the Supabase CLI (or however the AMS
-repo already runs migrations):
+Paste the whole of `supabase/schema.sql` into the Supabase SQL Editor (or
+run it with `psql`/the CLI) and run it. It's intentionally **one file, not a
+sequence of migrations** — it creates `site_activity`, `productivity_
+sessions`, and `site_categories` with `create table if not exists`, and
+fixes up a table already created under an earlier column-naming generation
+(the pre-rework `active`/`idle` names, or a retired `paused_seconds`
+column) via conditional `do $$ ... $$` blocks. That makes it safe to run
+against a brand-new database, a partially-set-up one, or one that already
+has an older version of this schema — and safe to just run again after any
+future change to this file, rather than needing to track which of several
+migration files have already been applied.
 
-1. `20260917120000_productivity_tracking.sql` — `site_activity`,
-   `productivity_sessions`, `site_categories` + RLS. Assumes
-   `public.profiles` and a `public.is_admin()` function already exist (same
-   ones the AMS's `attendance`/`salary_slips` policies use) — it doesn't
-   redefine them.
-2. `20260918100000_productive_sessions_rework.sql` — renames the
-   active/idle columns to `total_productive_seconds` /
-   `total_unproductive_seconds` (on `productivity_sessions`) and
-   `productive_seconds` / `unproductive_seconds` (on `site_activity`), and
-   drops a since-retired `paused_seconds` column from an interim design.
+It assumes `public.profiles` and a `public.is_admin()` function already
+exist (same ones the AMS's `attendance`/`salary_slips` policies use) — it
+doesn't define those.
+
+If you hit `column "..." does not exist` running this, it usually means the
+base tables were never created in that database yet — this file handles
+that itself (it creates them), so just re-run the whole file rather than
+trying to run part of it.
 
 ### 2. Extension
 
@@ -197,6 +207,10 @@ OS-level input, indistinguishable from a human by any browser extension.
   belongs in `chrome.storage`, not a `let`) is now applied consistently, but
   a real multi-minute smoke test is still the way to catch anything like
   this that scripted tests didn't.
-- The productive/unproductive AND-threshold risk described above is a
-  known, accepted tradeoff from the spec, not a bug — but it's the first
-  thing to reconsider if reported numbers don't match reality.
+- The productive/unproductive formula uses OR (either keys or mouse
+  activity alone is enough) — a deliberate, known tradeoff, not a bug. It's
+  more forgiving of one-sided legitimate work than an AND-based formula
+  would be, but also easier to satisfy with minimal, non-work activity.
+  It's still the first thing to reconsider — along with remembering this
+  only sees activity inside the browser tab, not other applications — if
+  reported numbers don't match reality.

@@ -23,13 +23,50 @@ function emptyState(date) {
 
 let cache = null;
 
+function toFiniteNumber(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+// A stored object can predate a field rename (this project has already
+// renamed this shape once, from active/idle to productive/unproductive).
+// Trusting it just because workDate matches lets a missing/renamed field
+// read back as `undefined`, and `undefined += seconds` is permanently NaN
+// from then on — never recovers, and corrupts whatever gets synced to
+// Supabase too. Normalize onto fresh defaults instead of trusting the
+// stored shape blindly.
+function normalizeState(existing, today) {
+  const base = emptyState(today);
+  if (!existing || typeof existing !== 'object') return base;
+
+  const sites = {};
+  if (existing.sites && typeof existing.sites === 'object') {
+    for (const [hostname, site] of Object.entries(existing.sites)) {
+      sites[hostname] = {
+        productiveSeconds: toFiniteNumber(site?.productiveSeconds, 0),
+        unproductiveSeconds: toFiniteNumber(site?.unproductiveSeconds, 0),
+        category: typeof site?.category === 'string' ? site.category : 'UNCATEGORIZED',
+      };
+    }
+  }
+
+  return {
+    ...base,
+    ...existing,
+    sites,
+    totalProductiveSeconds: toFiniteNumber(existing.totalProductiveSeconds, 0),
+    totalUnproductiveSeconds: toFiniteNumber(existing.totalUnproductiveSeconds, 0),
+    tabSwitchCount: toFiniteNumber(existing.tabSwitchCount, 0),
+    flagReasons: Array.isArray(existing.flagReasons) ? existing.flagReasons : [],
+  };
+}
+
 async function loadState() {
   const today = utcDateString();
   if (cache && cache.workDate === today) return cache;
 
   const stored = await chrome.storage.local.get(STORAGE_KEY);
   const existing = stored[STORAGE_KEY];
-  cache = existing && existing.workDate === today ? existing : emptyState(today);
+  cache = existing && existing.workDate === today ? normalizeState(existing, today) : emptyState(today);
   return cache;
 }
 

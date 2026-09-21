@@ -26,10 +26,28 @@ function emptyState() {
 
 let cache = null;
 
+function toFiniteNumber(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+// Same defensive normalization as dailyState.js — never trust a stored
+// shape blindly, since a missing/non-numeric field silently becomes
+// permanent NaN the moment something adds to it.
+function normalizeState(existing) {
+  const base = emptyState();
+  if (!existing || typeof existing !== 'object') return base;
+  return {
+    ...base,
+    ...existing,
+    windowKeyCount: toFiniteNumber(existing.windowKeyCount, 0),
+    windowMouseActivityCount: toFiniteNumber(existing.windowMouseActivityCount, 0),
+  };
+}
+
 export async function getSessionState() {
   if (cache) return cache;
   const stored = await chrome.storage.session.get(STORAGE_KEY);
-  cache = stored[STORAGE_KEY] ?? emptyState();
+  cache = normalizeState(stored[STORAGE_KEY]);
   return cache;
 }
 

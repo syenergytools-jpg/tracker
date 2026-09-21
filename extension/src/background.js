@@ -35,7 +35,11 @@ async function ensureAlarm(name, alarmInfo) {
 ensureAlarm('window', { periodInMinutes: WINDOW_SECONDS / 60 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'window') handleWindowAlarm();
+  if (alarm.name !== 'window') return;
+  // An uncaught rejection here would otherwise fail silently — this is a
+  // recurring 3-minute handler with no caller to report back to, so it's
+  // the only chance to surface a problem before it repeats indefinitely.
+  handleWindowAlarm().catch((err) => console.error('[ams-productivity] window evaluation failed:', err));
 });
 
 chrome.runtime.onSuspend.addListener(() => {
@@ -143,7 +147,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleActivityBatch(payload, sender) {
-  if (!payload || sender.tab?.id !== focusedTabId) return; // only the focused tab counts
+  // Previously also required `sender.tab?.id === focusedTabId`. Dropped:
+  // a background/unfocused tab's page cannot receive real keydown/mousemove
+  // DOM events from actual user input in the first place (the OS only
+  // routes input to the focused window), so the check was redundant for
+  // real activity — and it was a single point of failure that silently
+  // dropped every batch if focusedTabId ever fell out of sync (e.g. missed
+  // on the initial tab query, or lost across a service worker restart).
+  if (!payload || !sender.tab) return;
 
   const trackSession = await getSessionState();
   if (!trackSession.running) return; // nothing accrues outside a Start/Stop session
@@ -151,6 +162,15 @@ async function handleActivityBatch(payload, sender) {
   trackSession.windowKeyCount += payload.keyCount;
   trackSession.windowMouseActivityCount += payload.mouseMoveCount + payload.mouseDownCount + payload.scrollCount;
   await saveSessionState();
+  console.debug(
+    '[ams-productivity] activity batch:',
+    JSON.stringify(payload),
+    '-> window totals:',
+    trackSession.windowKeyCount,
+    'keys,',
+    trackSession.windowMouseActivityCount,
+    'mouse'
+  );
 
   const reasons = heuristics.recordBatch(payload);
   if (reasons.length > 0) await applyFlagReasons(reasons);
@@ -185,6 +205,18 @@ async function resolveWindow(trackSession, elapsedSeconds) {
     keyCount: trackSession.windowKeyCount,
     mouseActivityCount: trackSession.windowMouseActivityCount,
   });
+  console.debug(
+    '[ams-productivity] window resolved:',
+    Math.round(elapsedSeconds),
+    's, keys=',
+    trackSession.windowKeyCount,
+    'mouse=',
+    trackSession.windowMouseActivityCount,
+    '-> ',
+    isProductive ? 'PRODUCTIVE' : 'unproductive',
+    'on',
+    currentHostname
+  );
   const category = currentHostname ? await getCategory(currentHostname) : undefined;
   await commitWindow({ hostname: currentHostname, seconds: elapsedSeconds, isProductive, category });
 }

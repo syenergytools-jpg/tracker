@@ -24,7 +24,11 @@ function showView(view) {
 }
 
 function formatStopwatch(totalSeconds) {
-  const s = Math.max(0, Math.floor(totalSeconds));
+  // Guards the display only — if this is ever non-finite, that's a real bug
+  // upstream (see dailyState.js/sessionState.js normalization) worth fixing,
+  // not something to paper over silently. Showing 00:00:00 instead of NaN
+  // just keeps one bad read from breaking the whole popup.
+  const s = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
