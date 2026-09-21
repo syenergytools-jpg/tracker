@@ -13,6 +13,7 @@ import { isWindowProductive } from './lib/productivityFormula.js';
 const WINDOW_SECONDS = 180;
 
 let focusedTabId = null;
+let focusedWindowId = null;
 let currentHostname = null;
 let tabFocusedAt = 0;
 
@@ -60,15 +61,28 @@ async function restoreSession() {
 
 async function initFocusedTab() {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab) await handleTabFocusChange(tab.id);
+  if (tab) {
+    focusedWindowId = tab.windowId;
+    await handleTabFocusChange(tab.id);
+  }
 }
 
 // ---- tab / focus tracking ---------------------------------------------
 
-chrome.tabs.onActivated.addListener(({ tabId }) => handleTabFocusChange(tabId));
+// chrome.tabs.onActivated fires for a tab-activation change in ANY Chrome
+// window, including ones that don't currently have OS focus — e.g. closing
+// a tab in a background window makes Chrome auto-activate the adjacent
+// tab there, which fires onActivated even though the user never looked at
+// that window. Gating on the window actually being the focused one avoids
+// counting activity the user never saw as a tab switch.
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  if (windowId !== focusedWindowId) return;
+  handleTabFocusChange(tabId);
+});
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return; // browser lost OS focus; keep last known tab
+  focusedWindowId = windowId;
   const [tab] = await chrome.tabs.query({ active: true, windowId });
   if (tab) await handleTabFocusChange(tab.id);
 });
