@@ -4,6 +4,17 @@ const path = require('node:path');
 const { supabase, fetchProfile } = require('./src/supabaseClient');
 const trackingEngine = require('./src/trackingEngine');
 
+// Without these, a thrown error during startup (e.g. tray icon creation)
+// can otherwise disappear rather than showing up in the terminal, which is
+// exactly the "nothing happened, no error either" situation this is meant
+// to prevent from happening silently again.
+process.on('uncaughtException', (err) => {
+  console.error('[evolut-productivity-agent] uncaught exception:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[evolut-productivity-agent] unhandled rejection:', err);
+});
+
 let tray = null;
 let popupWindow = null;
 let currentUser = null; // { id, role, email }
@@ -141,6 +152,8 @@ async function confirmAndQuit() {
 }
 
 app.whenReady().then(async () => {
+  console.log('[evolut-productivity-agent] app ready, creating window and tray icon...');
+
   // Sole tracking tool now, so it needs to actually be running for tracking
   // to happen at all — relying on the employee to remember to launch it
   // each day isn't a reasonable expectation. Runs once per app start; a
@@ -149,7 +162,8 @@ app.whenReady().then(async () => {
 
   createPopupWindow();
 
-  tray = new Tray(path.join(__dirname, 'icons', 'tray.ico'));
+  const trayIconPath = path.join(__dirname, 'icons', 'tray.ico');
+  tray = new Tray(trayIconPath);
   tray.on('click', togglePopup);
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -157,6 +171,10 @@ app.whenReady().then(async () => {
       { type: 'separator' },
       { label: 'Quit', click: () => confirmAndQuit() },
     ])
+  );
+  console.log(
+    `[evolut-productivity-agent] tray icon created from ${trayIconPath} — check the Windows taskbar's ` +
+      `hidden-icons overflow (the "^" near the clock) if you don't see it in the main tray area.`
   );
 
   ipcMain.handle('message', async (_event, { type, payload }) => {
