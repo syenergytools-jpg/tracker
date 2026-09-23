@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, powerMonitor } = require('electron');
 const path = require('node:path');
 const { supabase, fetchProfile } = require('./src/supabaseClient');
 const trackingEngine = require('./src/trackingEngine');
@@ -176,6 +176,23 @@ app.whenReady().then(async () => {
     `[evolut-productivity-agent] tray icon created from ${trayIconPath} — check the Windows taskbar's ` +
       `hidden-icons overflow (the "^" near the clock) if you don't see it in the main tray area.`
   );
+
+  // Locking the PC means stopping tracking, not signing out — the employee
+  // hasn't done anything (didn't click Stop, didn't sign out), the machine
+  // just isn't in use. trackingEngine.stop() already does exactly the right
+  // thing here: resolves the final partial window, flushes it, and leaves
+  // currentUser/the auth session untouched. Deliberately does NOT
+  // auto-resume on unlock — same reasoning as everywhere else in this
+  // project, starting a tracked session is the employee's action to take,
+  // not something the system does for them.
+  powerMonitor.on('lock-screen', async () => {
+    console.log('[evolut-productivity-agent] screen locked — stopping tracking (session stays signed in)');
+    await trackingEngine.stop();
+    updateTrayState();
+  });
+  powerMonitor.on('unlock-screen', () => {
+    console.log('[evolut-productivity-agent] screen unlocked — click Start to resume tracking');
+  });
 
   ipcMain.handle('message', async (_event, { type, payload }) => {
     switch (type) {

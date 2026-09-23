@@ -5,10 +5,12 @@ across **all** applications, including the browser — the sole tracking
 tool for employees, no Chrome extension required. Uses the same Supabase
 project and login as the AMS.
 
-**This is a dev-mode build, not a distributable installer.** `npm start`
-runs it directly; producing a signed `.exe` your employees can actually
-install is a separate step this pass didn't complete — see "What's not
-done" below before you try to roll this out to anyone.
+**No signed installer yet.** `npm run build:win` does produce a working
+one-click NSIS installer (verified — see "What was actually verified"
+below), but it's unsigned: `Get-AuthenticodeSignature` on the output
+reports `NotSigned`, so Windows SmartScreen and most antivirus/EDR will
+flag it on every employee machine until it's code-signed. See "What's not
+done" before rolling this out to anyone.
 
 ## How it works
 
@@ -20,11 +22,13 @@ done" below before you try to roll this out to anyone.
    that window saw enough keypresses **or** enough mouse/scroll activity —
    the identical formula and thresholds as the original extension design,
    kept in `src/productivityFormula.js`.
-4. Tracking stops when you click **Stop**, quit the app (with a
-   confirmation, since quitting now means a real coverage gap), or the
-   next Windows login triggers a fresh launch — the app is registered to
-   auto-start on login, since a sole tracking tool needs to actually be
-   running for tracking to happen at all.
+4. Tracking stops when you click **Stop**, when you lock the PC
+   (`powerMonitor`'s `lock-screen` event — stops tracking but does **not**
+   sign you out; unlocking doesn't auto-resume either, click Start again
+   when you're back), or when you quit the app (with a confirmation, since
+   quitting now means a real coverage gap). The app is registered to
+   auto-start on Windows login, since a sole tracking tool needs to
+   actually be running for tracking to happen at all.
 
 ## The tradeoff you already accepted
 
@@ -118,12 +122,21 @@ but there if needed).
   against a stale/foreign shape on disk were confirmed with scripted
   tests, along with confirming this agent uses the identical productivity
   formula as the original extension design.
-- **Not verified**: the actual tray icon rendering, the popup window's
-  visual layout, the confirm-before-quit dialog, or a real
-  Start→type→Stop→sync round trip with genuine keyboard/mouse input —
-  none of that is drivable from this environment (no way to generate real
-  OS-level input or see a native window render). Do that pass yourself
-  before trusting this with real data: run it, sign in, click Start, work
-  normally (including in a browser) for a few minutes, click Stop, and
-  check that `productivity_sessions` and `app_activity` rows actually
-  appear in Supabase with sane numbers.
+- **`npm run build:win` was run for real** and produces a working one-click
+  NSIS installer (`dist/Evolut Productivity Agent Setup 1.0.0.exe`, ~114MB).
+  Confirmed unsigned via `Get-AuthenticodeSignature` (`Status: NotSigned`) —
+  see above.
+- **A real Start→work→sync round trip has since been confirmed against
+  production data**, not just scripted tests: after real usage (tracking
+  correctly accumulated ~24 minutes across `chrome.exe`, an editor, and
+  other apps), a sync failure was diagnosed by reproducing the exact
+  Supabase calls with the real cached session and real accumulated
+  data — root cause was a database that hadn't been updated to the current
+  `supabase/schema.sql` (missing `app_activity` table and
+  `app_switch_count` column), not an application bug. Once the schema was
+  brought current, sync succeeded and the dashboard reflected real data.
+- **Not verified**: the actual tray icon rendering or the popup window's
+  visual layout (no way to see a native window render from this
+  environment), and the confirm-before-quit / lock-screen-stops-tracking
+  dialogs specifically (added after the round trip above, not yet
+  exercised against a real lock/quit).

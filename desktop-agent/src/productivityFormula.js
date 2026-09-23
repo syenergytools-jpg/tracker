@@ -7,7 +7,7 @@
 // real typing OR real mouse/scroll activity within the same window (either
 // is enough). Deliberately hidden from the employee — see main.js.
 const PRODUCTIVE_KEY_THRESHOLD = 30;
-const PRODUCTIVE_MOUSE_ACTIVITY_THRESHOLD = 3; // sum of move+click+scroll events
+const PRODUCTIVE_MOUSE_ACTIVITY_THRESHOLD = 10; // sum of move+click+scroll events
 
 function isWindowProductive({ keyCount, mouseActivityCount }) {
   return keyCount >= PRODUCTIVE_KEY_THRESHOLD || mouseActivityCount >= PRODUCTIVE_MOUSE_ACTIVITY_THRESHOLD;
