@@ -11,10 +11,10 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "active-win": "^8.2.1",
+    "dotenv": "^18.0.1",
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "dotenv": "^18.0.1",
     "electron": "^44.4.3",
     "electron-builder": "^26.15.3"
   },
@@ -25,6 +25,6 @@
       "target": "nsis",
       "icon": "icons/icon.ico"
     },
-    "files": ["main.js", "preload.js", "popup.html", "popup.css", "popup.js", "src/**/*", "icons/**/*"]
+    "files": ["main.js", "preload.js", "popup.html", "popup.css", "popup.js", "src/**/*", "icons/**/*", ".env"]
   }
 }

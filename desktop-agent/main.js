@@ -1,4 +1,10 @@
-require('dotenv').config();
+// dotenv's default config() looks for .env relative to process.cwd(),
+// which for an installed app launched from a shortcut or auto-start is NOT
+// reliably the app's own install directory. Resolve it explicitly against
+// this file's own location instead — works whether running from source
+// (npm start) or packaged inside app.asar, since Electron's patched fs
+// reads plain text files out of an asar archive transparently.
+require('dotenv').config({ path: require('node:path').join(__dirname, '.env') });
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, powerMonitor } = require('electron');
 const path = require('node:path');
 const { supabase, fetchProfile } = require('./src/supabaseClient');
