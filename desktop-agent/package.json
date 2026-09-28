@@ -21,6 +21,9 @@
   "build": {
     "appId": "com.evolut.productivity-agent",
     "productName": "Evolut Productivity Agent",
+    "electronLanguages": ["en-US", "en"],
+    "compression": "maximum",
+    "removePackageScripts": true,
     "win": {
       "target": "nsis",
       "icon": "icons/icon.ico"
