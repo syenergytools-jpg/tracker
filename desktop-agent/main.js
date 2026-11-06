@@ -9,6 +9,7 @@ const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, powerMonitor } 
 const path = require('node:path');
 const { supabase, fetchProfile } = require('./src/supabaseClient');
 const trackingEngine = require('./src/trackingEngine');
+const { readJSON, writeJSON } = require('./src/store');
 
 // Without these, a thrown error during startup (e.g. tray icon creation)
 // can otherwise disappear rather than showing up in the terminal, which is
@@ -23,7 +24,15 @@ process.on('unhandledRejection', (err) => {
 
 let tray = null;
 let popupWindow = null;
+let floatingWindow = null;
 let currentUser = null; // { id, role, email }
+
+// Set whenever the popup hides because it lost focus. Lets a click on the
+// floating launcher that stole that focus read as "close", not "reopen".
+let popupHiddenByBlurAt = 0;
+
+const FLOATING_SIZE = 72; // window px; the bubble itself is 56px, centred inside
+const EDGE_MARGIN = 8;
 
 function createPopupWindow() {
   popupWindow = new BrowserWindow({
@@ -44,7 +53,10 @@ function createPopupWindow() {
   // (Slack, Dropbox, etc.) — never destroyed, just hidden, so app state
   // (and the tracking engine, which lives in this same process) keeps
   // running regardless of whether the popup is open.
-  popupWindow.on('blur', () => popupWindow.hide());
+  popupWindow.on('blur', () => {
+    popupHiddenByBlurAt = Date.now();
+    popupWindow.hide();
+  });
 }
 
 function positionPopupNearTray() {
@@ -67,16 +79,133 @@ function togglePopup() {
   popupWindow.focus();
 }
 
-// Required by design, same principle as the extension: this agent must
-// never track silently. The tray tooltip always shows a state.
-function updateTrayState() {
-  if (!tray) return;
-  if (!currentUser) {
-    tray.setToolTip('Evolut Productivity Agent — signed out');
+// ---- Floating always-on-top launcher ----------------------------------
+// A small round bubble pinned to a screen edge. The hidden tray icon (in
+// the "^" overflow) is why employees forget to press Start; this keeps the
+// control visible at all times. It owns no tracking logic — a click just
+// toggles the same popup window the tray opens.
+
+function clampToWorkArea(x, y, width, height) {
+  const display = screen.getDisplayNearestPoint({
+    x: Math.round(x + width / 2),
+    y: Math.round(y + height / 2),
+  });
+  const area = display.workArea;
+  return {
+    display,
+    x: Math.max(area.x, Math.min(Math.round(x), area.x + area.width - width)),
+    y: Math.max(area.y, Math.min(Math.round(y), area.y + area.height - height)),
+  };
+}
+
+function createFloatingWindow() {
+  floatingWindow = new BrowserWindow({
+    width: FLOATING_SIZE,
+    height: FLOATING_SIZE,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  // Above normal windows so it stays visible, but 'floating' rather than a
+  // higher level so it doesn't sit over screensavers etc.
+  floatingWindow.setAlwaysOnTop(true, 'floating');
+  floatingWindow.loadFile('floating.html');
+
+  // Default: parked against the right edge, vertically centred. Restore the
+  // employee's last spot if they've dragged it, clamped back onto a real
+  // display in case the monitor layout changed since.
+  const saved = readJSON('floating-position', null);
+  const primary = screen.getPrimaryDisplay().workArea;
+  const startX =
+    saved && Number.isFinite(saved.x)
+      ? saved.x
+      : primary.x + primary.width - FLOATING_SIZE - EDGE_MARGIN;
+  const startY =
+    saved && Number.isFinite(saved.y)
+      ? saved.y
+      : Math.round(primary.y + (primary.height - FLOATING_SIZE) / 2);
+  const placed = clampToWorkArea(startX, startY, FLOATING_SIZE, FLOATING_SIZE);
+  floatingWindow.setPosition(placed.x, placed.y, false);
+
+  // showInactive so appearing on launch never steals focus from whatever
+  // the employee is already doing.
+  floatingWindow.once('ready-to-show', () => floatingWindow.showInactive());
+  floatingWindow.webContents.on('did-finish-load', updateFloatingState);
+}
+
+function updateFloatingState() {
+  if (!floatingWindow || floatingWindow.isDestroyed()) return;
+  const running = currentUser ? trackingEngine.getStatus().running : false;
+  floatingWindow.webContents.send('floating-state', {
+    authenticated: !!currentUser,
+    running,
+  });
+}
+
+function positionPopupNearFloating() {
+  const anchor = floatingWindow.getBounds();
+  const popup = popupWindow.getBounds();
+  const display = screen.getDisplayNearestPoint({ x: anchor.x, y: anchor.y });
+  const area = display.workArea;
+
+  const spaceRight = area.x + area.width - (anchor.x + anchor.width);
+  // Open on whichever side of the bubble has room; prefer the left when the
+  // bubble is parked against the right edge (the default).
+  let x =
+    spaceRight < popup.width + EDGE_MARGIN
+      ? anchor.x - popup.width - EDGE_MARGIN
+      : anchor.x + anchor.width + EDGE_MARGIN;
+  let y = anchor.y + anchor.height / 2 - popup.height / 2;
+
+  x = Math.max(area.x, Math.min(x, area.x + area.width - popup.width));
+  y = Math.max(area.y, Math.min(y, area.y + area.height - popup.height));
+  popupWindow.setPosition(Math.round(x), Math.round(y), false);
+}
+
+function togglePopupFromFloating() {
+  if (!popupWindow) return;
+  if (popupWindow.isVisible()) {
+    popupWindow.hide();
     return;
   }
-  const status = trackingEngine.getStatus();
-  tray.setToolTip(`Evolut Productivity Agent — ${status.running ? 'running' : 'ready'}`);
+  // If clicking the bubble just stole focus from an open popup (hiding it via
+  // blur a moment ago), treat this click as "close" and leave it hidden
+  // rather than flickering it straight back open.
+  if (Date.now() - popupHiddenByBlurAt < 300) return;
+  positionPopupNearFloating();
+  popupWindow.show();
+  popupWindow.focus();
+}
+
+// Required by design, same principle as the extension: this agent must
+// never track silently. The tray tooltip (and now the floating bubble's
+// colour) always shows a state.
+function updateTrayState() {
+  if (tray) {
+    if (!currentUser) {
+      tray.setToolTip('Evolut Productivity Agent — signed out');
+    } else {
+      const status = trackingEngine.getStatus();
+      tray.setToolTip(`Evolut Productivity Agent — ${status.running ? 'running' : 'ready'}`);
+    }
+  }
+  // Keep the floating launcher in sync with every state change that already
+  // routes through here (sign in/out, start, stop, lock).
+  updateFloatingState();
 }
 
 async function loadCurrentUser(session) {
@@ -167,6 +296,7 @@ app.whenReady().then(async () => {
   app.setLoginItemSettings({ openAtLogin: true });
 
   createPopupWindow();
+  createFloatingWindow();
 
   const trayIconPath = path.join(__dirname, 'icons', 'tray.ico');
   tray = new Tray(trayIconPath);
@@ -216,6 +346,30 @@ app.whenReady().then(async () => {
         return {};
     }
   });
+
+  // Floating launcher -> main. These are fire-and-forget (ipcRenderer.send):
+  // dragging needs to be smooth, and none of them return a value.
+  ipcMain.on('floating-move', (_event, { x, y }) => {
+    if (!floatingWindow || floatingWindow.isDestroyed()) return;
+    floatingWindow.setPosition(Math.round(x), Math.round(y), false);
+  });
+
+  ipcMain.on('floating-drag-end', (_event, { x, y }) => {
+    if (!floatingWindow || floatingWindow.isDestroyed()) return;
+    // Snap to whichever vertical edge the bubble ended up closest to, so it
+    // always parks cleanly against a side instead of floating mid-screen.
+    const placed = clampToWorkArea(x, y, FLOATING_SIZE, FLOATING_SIZE);
+    const area = placed.display.workArea;
+    const centerX = placed.x + FLOATING_SIZE / 2;
+    const finalX =
+      centerX < area.x + area.width / 2
+        ? area.x + EDGE_MARGIN
+        : area.x + area.width - FLOATING_SIZE - EDGE_MARGIN;
+    floatingWindow.setPosition(finalX, placed.y, false);
+    writeJSON('floating-position', { x: finalX, y: placed.y });
+  });
+
+  ipcMain.on('floating-click', () => togglePopupFromFloating());
 
   const {
     data: { session },

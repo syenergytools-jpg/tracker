@@ -1,0 +1,110 @@
+/* The window itself is frameless + transparent (see createFloatingWindow in
+   main.js); this just paints a round launcher centred inside it, leaving a
+   margin around the bubble so the drop shadow and the running/ready pulse
+   rings have room to render without being clipped at the window edge. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: grab;
+  font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body { display: flex; align-items: center; justify-content: center; }
+
+body:active { cursor: grabbing; }
+
+.bubble {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  color: #6b7280;
+  transition: color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}
+
+.bubble:active { transform: scale(0.94); }
+
+/* Company logo fills the bubble and is clipped to the circle by its own
+   border-radius (not overflow:hidden on .bubble, which would also clip the
+   pulse ring). object-fit:cover keeps the square logo undistorted. */
+.logo {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  pointer-events: none; /* clicks/drags are handled on .bubble, not the image */
+  -webkit-user-drag: none;
+  user-select: none;
+}
+
+/* Small status dot in the corner, reinforcing the colour of the ring for
+   anyone who can't tell the pulse states apart at a glance. */
+.badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #9ca3af;
+  border: 2px solid #ffffff;
+}
+
+/* ---- Running: calm green, steady "it's on" pulse ---- */
+.bubble.running {
+  color: #16a34a;
+  border-color: #86efac;
+}
+.bubble.running .badge { background: #16a34a; }
+.bubble.running::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid #16a34a;
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+/* ---- Ready (signed in, NOT tracking): amber attention nudge, the whole
+        point of putting the icon on screen — "you haven't started yet" ---- */
+.bubble.ready {
+  color: #d97706;
+  border-color: #fcd34d;
+}
+.bubble.ready .badge { background: #f59e0b; }
+.bubble.ready::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 2px solid #f59e0b;
+  animation: pulse-ring 1.6s ease-out infinite;
+}
+
+/* ---- Signed out: muted, no pulse (nothing to nudge toward yet) ---- */
+.bubble.signed-out {
+  color: #9ca3af;
+  border-color: #e5e7eb;
+}
+.bubble.signed-out .badge { background: #9ca3af; }
+
+@keyframes pulse-ring {
+  0%   { transform: scale(0.9);  opacity: 0.7; }
+  70%  { transform: scale(1.25); opacity: 0;   }
+  100% { transform: scale(1.25); opacity: 0;   }
+}

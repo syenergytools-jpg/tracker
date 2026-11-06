@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Evolut Productivity</title>
+<link rel="stylesheet" href="floating.css" />
+</head>
+<body>
+<!--
+  Always-on-top floating launcher. It holds no tracking logic of its own —
+  a click just toggles the same popup window the tray icon opens (see
+  main.js), so there is exactly one source of truth for auth + tracking
+  state. Its only job is to be visible so employees stop forgetting to
+  press Start, which the hidden tray icon never achieved.
+-->
+<div id="bubble" class="bubble" role="button" tabindex="-1">
+  <img class="logo" src="icons/icon.png" alt="Evolut" draggable="false" />
+  <span class="badge"></span>
+</div>
+<script src="floating.js"></script>
+</body>
+</html>

@@ -28,6 +28,6 @@
       "target": "nsis",
       "icon": "icons/icon.ico"
     },
-    "files": ["main.js", "preload.js", "popup.html", "popup.css", "popup.js", "src/**/*", "icons/**/*", ".env"]
+    "files": ["main.js", "preload.js", "popup.html", "popup.css", "popup.js", "floating.html", "floating.css", "floating.js", "src/**/*", "icons/**/*", ".env"]
   }
 }
