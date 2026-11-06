@@ -4,11 +4,11 @@ const { isSubBlockActive } = require('./productivityFormula');
 const dailyState = require('./dailyState');
 const { syncWithRetry } = require('./sync');
 
-// Level 2 "active-seconds" model: time is measured in 15-second sub-blocks,
+// Level 2 "active-seconds" model: time is measured in 90-second sub-blocks,
 // each judged active (-> productive) or idle (-> unproductive) on its own.
 // The day's productive/unproductive split is the sum of those blocks, which
 // is what spreads scores out instead of pinning everyone near 100%.
-const SUBBLOCK_MS = 15 * 1000; // 12 blocks per 3 minutes
+const SUBBLOCK_MS = 90 * 1000; // 2 blocks per 3 minutes
 const APP_POLL_MS = 5000;
 const SYNC_PERIOD_MS = 3 * 60 * 1000;
 
@@ -75,7 +75,7 @@ async function resolveSubBlock() {
   await dailyState.rotateIfNeeded((staleState) => flush(staleState));
 
   // Capture the seconds right up to this block boundary before committing, so
-  // the block owns its full ~15s instead of losing the tail since the last
+  // the block owns its full ~90s instead of losing the tail since the last
   // 5s poll.
   await pollForegroundApp();
 
@@ -85,8 +85,9 @@ async function resolveSubBlock() {
   });
 
   // Every app used in the block inherits the block's verdict. An idle block
-  // (no keys/clicks/scroll) is productive === false, so idle time becomes
-  // unproductive time — this is the idle penalty, at 15s granularity.
+  // (no keys/clicks/scroll for the full 90s) is productive === false, so idle
+  // time becomes unproductive time — this is the idle penalty, at 90s
+  // granularity.
   for (const [appName, seconds] of blockAppSeconds.entries()) {
     dailyState.commitWindow({ appName, seconds, isProductive });
   }
@@ -105,6 +106,7 @@ async function flush(stateOverride) {
 function start(userId) {
   if (running) return { running: true, sessionStartedAt };
   currentUserId = userId;
+  dailyState.setUser(userId);
 
   running = true;
   sessionStartedAt = Date.now();
@@ -135,7 +137,7 @@ async function stop() {
   syncTimer = null;
   uIOhook.stop();
 
-  // Resolve whatever partial block accumulated since the last 15s boundary
+  // Resolve whatever partial block accumulated since the last 90s boundary
   // (resolveSubBlock does a final poll itself), rather than discarding it.
   await resolveSubBlock();
   await flush();
@@ -158,6 +160,10 @@ function getStatus() {
 
 function setUser(userId) {
   currentUserId = userId;
+  // Scope the daily accumulator to this user so two people sharing one Windows
+  // profile (separate app logins) never share totals — prevents the second
+  // shift's hours being added on top of the first's.
+  dailyState.setUser(userId);
 }
 
 module.exports = { start, stop, getStatus, setUser };

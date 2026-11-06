@@ -6,7 +6,14 @@
 
 const { readJSON, writeJSON } = require('./store');
 
-const KEY = 'daily-state';
+// Daily state is stored PER USER (daily-state-<userId>.json), not in one
+// shared file. Two employees who share the same Windows profile but sign in
+// with different credentials must NOT share an accumulator — otherwise the
+// second person to sign in starts from wherever the first person left off,
+// which is exactly the "7 hours shows as 14" double-counting bug this avoids.
+function storageKeyFor(userId) {
+  return `daily-state-${userId}`;
+}
 
 function utcDateString(d = new Date()) {
   return d.toISOString().slice(0, 10);
@@ -51,18 +58,48 @@ function normalizeState(existing, today) {
   };
 }
 
+let currentUserId = null;
 let cache = null;
+let cacheUserId = null;
+let cacheEphemeral = false;
+
+// Called whenever the signed-in user changes (see trackingEngine.setUser).
+// Switching users drops the cached accumulator so the next read loads the new
+// user's own file instead of inheriting the previous user's running totals.
+function setUser(userId) {
+  if (userId === currentUserId) return;
+  currentUserId = userId;
+  cache = null;
+  cacheUserId = null;
+  cacheEphemeral = false;
+}
 
 function loadState() {
   const today = utcDateString();
-  if (cache && cache.workDate === today) return cache;
-  const existing = readJSON(KEY, null);
+
+  // Nobody signed in: hand back a throwaway, zeroed state that never gets
+  // written to disk, rather than reading or creating any user's file.
+  if (!currentUserId) {
+    if (cache && cacheEphemeral && cache.workDate === today) return cache;
+    cache = emptyState(today);
+    cacheUserId = null;
+    cacheEphemeral = true;
+    return cache;
+  }
+
+  if (cache && !cacheEphemeral && cacheUserId === currentUserId && cache.workDate === today) {
+    return cache;
+  }
+
+  const existing = readJSON(storageKeyFor(currentUserId), null);
   cache = existing && existing.workDate === today ? normalizeState(existing, today) : emptyState(today);
+  cacheUserId = currentUserId;
+  cacheEphemeral = false;
   return cache;
 }
 
 function saveState() {
-  if (cache) writeJSON(KEY, cache);
+  if (cache && !cacheEphemeral && cacheUserId) writeJSON(storageKeyFor(cacheUserId), cache);
 }
 
 async function rotateIfNeeded(onRollover) {
@@ -116,4 +153,4 @@ function markSynced() {
   return state;
 }
 
-module.exports = { getState, commitWindow, recordAppSwitch, rotateIfNeeded, markSynced };
+module.exports = { getState, commitWindow, recordAppSwitch, rotateIfNeeded, markSynced, setUser };
