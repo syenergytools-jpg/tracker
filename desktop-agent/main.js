@@ -286,7 +286,32 @@ async function confirmAndQuit() {
   if (response === 0) app.quit();
 }
 
+// Single-instance guard. The app auto-starts at login AND can be opened
+// manually, and nothing stopped those from stacking — each extra copy spawned
+// its own tray icon and its own tracking engine, i.e. duplicate tracking (and
+// inflated hours). Hold a process-wide lock so only the first copy runs; any
+// later launch simply hands off to the running one and quits.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    // Someone launched a second copy — surface the existing one instead of
+    // letting another start.
+    if (floatingWindow && !floatingWindow.isDestroyed()) floatingWindow.showInactive();
+    if (popupWindow && !popupWindow.isDestroyed() && tray) {
+      positionPopupNearTray();
+      popupWindow.show();
+      popupWindow.focus();
+    }
+  });
+}
+
 app.whenReady().then(async () => {
+  // Lost the single-instance race: this is a duplicate launch, so do nothing
+  // (app.quit() was already called above) rather than create a second tray.
+  if (!gotSingleInstanceLock) return;
+
   console.log('[evolut-productivity-agent] app ready, creating window and tray icon...');
 
   // Sole tracking tool now, so it needs to actually be running for tracking

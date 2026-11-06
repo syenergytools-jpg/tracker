@@ -4,11 +4,11 @@ const { isSubBlockActive } = require('./productivityFormula');
 const dailyState = require('./dailyState');
 const { syncWithRetry } = require('./sync');
 
-// Level 2 "active-seconds" model: time is measured in 90-second sub-blocks,
+// Level 2 "active-seconds" model: time is measured in 150-second sub-blocks,
 // each judged active (-> productive) or idle (-> unproductive) on its own.
 // The day's productive/unproductive split is the sum of those blocks, which
 // is what spreads scores out instead of pinning everyone near 100%.
-const SUBBLOCK_MS = 90 * 1000; // 2 blocks per 3 minutes
+const SUBBLOCK_MS = 150 * 1000; // 150-second blocks
 const APP_POLL_MS = 5000;
 const SYNC_PERIOD_MS = 3 * 60 * 1000;
 
@@ -75,7 +75,7 @@ async function resolveSubBlock() {
   await dailyState.rotateIfNeeded((staleState) => flush(staleState));
 
   // Capture the seconds right up to this block boundary before committing, so
-  // the block owns its full ~90s instead of losing the tail since the last
+  // the block owns its full ~150s instead of losing the tail since the last
   // 5s poll.
   await pollForegroundApp();
 
@@ -85,8 +85,8 @@ async function resolveSubBlock() {
   });
 
   // Every app used in the block inherits the block's verdict. An idle block
-  // (no keys/clicks/scroll for the full 90s) is productive === false, so idle
-  // time becomes unproductive time — this is the idle penalty, at 90s
+  // (no keys/clicks/scroll for the full 150s) is productive === false, so idle
+  // time becomes unproductive time — this is the idle penalty, at 150s
   // granularity.
   for (const [appName, seconds] of blockAppSeconds.entries()) {
     dailyState.commitWindow({ appName, seconds, isProductive });
@@ -137,7 +137,7 @@ async function stop() {
   syncTimer = null;
   uIOhook.stop();
 
-  // Resolve whatever partial block accumulated since the last 90s boundary
+  // Resolve whatever partial block accumulated since the last 150s boundary
   // (resolveSubBlock does a final poll itself), rather than discarding it.
   await resolveSubBlock();
   await flush();
