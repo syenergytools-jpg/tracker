@@ -376,7 +376,13 @@ app.whenReady().then(async () => {
   // dragging needs to be smooth, and none of them return a value.
   ipcMain.on('floating-move', (_event, { x, y }) => {
     if (!floatingWindow || floatingWindow.isDestroyed()) return;
-    floatingWindow.setPosition(Math.round(x), Math.round(y), false);
+    // Clamp to the visible work area on EVERY move, not just on release. Before
+    // this, a drag set the raw cursor position, so pushing the bubble past the
+    // left/right (or top/bottom) edge slid it off-screen and it vanished — and
+    // if the release/snap didn't fire cleanly it stayed hidden. Clamping here
+    // means the bubble simply stops at the edge and can never leave the screen.
+    const placed = clampToWorkArea(x, y, FLOATING_SIZE, FLOATING_SIZE);
+    floatingWindow.setPosition(placed.x, placed.y, false);
   });
 
   ipcMain.on('floating-drag-end', (_event, { x, y }) => {
